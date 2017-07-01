@@ -1,0 +1,67 @@
+#include "../constants.srsl"
+
+struct Vertex
+{
+	float3 position : 0;
+	float4 color : 1;
+}
+
+struct TextureVertex
+{
+	float3 position : 0;
+	float2 texcoord : 1;
+	float4 color : 2;
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float4 color : 0;
+}
+
+struct TextureInterpolant
+{
+	float4 position : clipposition;
+	float4 color : 0;
+	float2 texcoord : 1;
+}
+
+struct Textures
+{
+	texture2d diffuse : 0;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants) 
+	vertexshader vs
+	{
+		float3 worldpos = tc.transforms[0].cast(float3x4) * float4(input.position, 1.0);
+		output.position = gc.worldToProjection * float4(worldpos, 1.0);
+		output.color = input.color;
+	}
+	stream(Interpolant) 
+	pixelshader ps
+	{
+		output.color = input.color;
+	}
+	stream(PixelOutput)
+}
+
+program Texture
+{
+	stream(TextureVertex) uniforms(VSConstants) 
+	vertexshader vs
+	{
+		float3 worldpos = tc.transforms[0].cast(float3x4) * float4(input.position, 1.0);
+		output.position = gc.worldToProjection * float4(worldpos, 1.0);
+		output.color = input.color;
+		output.texcoord = input.texcoord;
+	}
+	stream(TextureInterpolant) textures(Textures) 
+	pixelshader ps
+	{
+		output.color = input.color * sample(diffuse, input.texcoord);
+	}
+	stream(PixelOutput)
+}

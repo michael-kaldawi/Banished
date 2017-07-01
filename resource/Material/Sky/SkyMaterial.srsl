@@ -1,0 +1,45 @@
+#include "../constants.srsl"
+
+struct Vertex
+{
+	int4 position;
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float3 texcoord;
+}
+
+struct Textures
+{
+	texturecube clear : 0;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants)
+	vertexshader vs
+	{
+		float4x4 localToWorld = tc.transforms[0];
+		float3 position = input.position.xyz.cast(float3);
+		
+		output.texcoord = position * (1.0 / 512.0);
+		
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(position, 1.0);
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(Textures)
+	pixelshader ps
+	{
+		float4 clearSky = sample(clear, input.texcoord);
+		float4 cloudySky = sample(clear, float3(input.texcoord.xy, -input.texcoord.z));
+
+		/* winter will use half cloudy, fully cloudy when weather is occuring */
+		float t = lerp(pc.userPosition.x * 0.75, 1.0, pc.userPosition.w);
+
+		output.color = lerp(clearSky, cloudySky, t);
+	}
+	stream(PixelOutput)
+}

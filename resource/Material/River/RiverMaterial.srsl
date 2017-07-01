@@ -1,0 +1,128 @@
+#include "../constants.srsl"
+#include "../lighting.srsl"
+
+struct Vertex
+{
+	int4 position : 0;
+	int2 texcoord : 1;
+	float4 normal : 2;
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float4 texcoord;
+	float3 viewDir;
+	float4 screenProjection;
+	float4 lightFogAlpha;
+	#ifn DETAIL0 float4 shadowProjection; #end
+
+}
+
+struct Textures
+{
+	texture2d water : 0;
+	texture2d frame : 1;
+	texture2d reflection : 2;
+	texturecube highlight : 3;
+	shadow2d e_shadowMap : 5;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants)
+	vertexshader basevs
+	{
+		float3 position = input.position.xyz.cast(float3) / float3(48.0, 48.0, 256.0);
+	
+		float4x4 localToWorld = tc.transforms[0];
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(position, 1.0);
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+
+		#if GL3
+		float4x4 so = float4x4(
+			float4(0.5, 0.0, 0.0, 0.0),
+			float4(0.0, 0.5, 0.0, 0.0),
+			float4(0.0, 0.0, 1.0, 0.0),
+			float4(0.5, 0.5, 0.0, 1.0));
+		#else
+		float4x4 so = float4x4(
+			float4(0.5, 0.0, 0.0, 0.5),
+			float4(0.0, -0.5, 0.0, 0.5),
+			float4(0.0, 0.0, 1.0, 0.0),
+			float4(0.0, 0.0, 0.0, 1.0));
+		#end
+
+		output.screenProjection = so * output.position;
+	
+		output.lightFogAlpha.xyz = GetLightingFog(float3(0.0, 0.0, 1.0), output.position.z, lc.nearPlane, gc.fog);
+		output.lightFogAlpha.w = input.normal.z;
+	
+		output.texcoord.xy = input.texcoord.xy.cast(float2) / 1024.0;
+		output.texcoord.zw = output.texcoord.xy;
+	
+		output.viewDir = worldPosition - gc.cameraPosition.xyz;
+
+		#ifn DETAIL0
+		output.shadowProjection = lc.shadowProjection[0] * float4(worldPosition, 1.0);
+		#end
+	}
+	vertexshader vs : basevs
+	{
+		output.texcoord.w += gc.time.x * 0.01;
+		output.texcoord.y += gc.time.x * 0.02;
+	}
+	vertexshader lakevs : basevs
+	{
+		output.texcoord.wz += gc.time.xx * float2(0.01, 0.005);
+		output.texcoord.y += gc.time.x * -0.006 * 0.95;
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(Textures)
+	pixelshader ps
+	{
+		// too many instructions for ps_2_0 calling GetShadowHigh... limit river to medium shadow sampling
+		#if DETAIL3
+			float shadow = GetShadowMedium(e_shadowMap, input.shadowProjection, pc.texelSize.x);
+		#else
+			float shadow = #ifn DETAIL0 GetShadowValue(e_shadowMap, input.shadowProjection, pc.texelSize.x) #else 1.0 #end;
+		#end
+
+		float3 normal; 
+		normal.xy = sample(water, input.texcoord.xy).wy - 0.5;
+		normal.xy += sample(water, input.texcoord.zw).wy - 0.5;
+		normal.z = 1.0 - sqrt(dot(normal.xy, normal.xy));
+
+		float2 screenCoord = input.screenProjection.xy / input.screenProjection.w;
+		float4 frameBuffer = sample(frame, (screenCoord + normal.xy * 0.05));
+			
+		float d = dot(-normalize(input.viewDir), normal * float3(4.0, 4.0, 1.0));
+			
+		float3 dir = reflect(normalize(input.viewDir), normal);
+		float3 bloom = sample(highlight, dir).xyz * 1.5;
+
+		float fresnel = d * d;
+
+		float4 ref = sample(reflection, (screenCoord + normal.xy * 0.6));
+
+		float diffuseAmount = 0.33;
+		float refractAmount = (fresnel) * (1.0 - diffuseAmount);
+		float reflectAmount = (1.0 - fresnel) * (1.0 - diffuseAmount);
+			
+		float3 refractColor = frameBuffer.xyz;
+		float3 reflectColor = ref.xyz + bloom * ref.w;
+		float3 diffuseColor = float3(0.5, 0.55, 0.5) * shadow;
+			
+		float3 lighting = diffuseColor * diffuseAmount;
+		lighting += refractColor * refractAmount;
+		lighting += reflectColor * reflectAmount;
+
+		lighting = lerp(lighting.xyz, pc.fogColor.xyz, min(saturate(input.lightFogAlpha.z), pc.fogColor.w));
+		lighting = lerp(frameBuffer.xyz, lighting, frameBuffer.w);
+
+		output.color.xyz = lighting;
+		output.color.w = input.lightFogAlpha.w;
+		//output.color.xyz = frameBuffer.xyz;
+		//output.color.w = 1.0;
+	}
+	stream(PixelOutput)
+}

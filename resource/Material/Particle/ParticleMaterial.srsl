@@ -1,0 +1,119 @@
+#include "../constants.srsl"
+#include "../lighting.srsl"
+
+struct Vertex
+{
+	float4 position;
+	float4 color;
+	float4 uvOffset;
+	float roll;
+
+	#ifn DX9 uint instance : instanceid; #end
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float3 texcoordFog;
+	float3 lightDir;
+	float4 color;
+}
+
+struct Textures
+{
+	texture2d diffuse : 0;
+	texture2d normal : 1;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants)
+	vertexshader vs
+	{
+		float s = sin(input.roll);
+		float c = cos(input.roll);
+
+		float2x2 rollMatrix = float2x2(float2(c, -s), float2(s, c));
+		input.uvOffset.zw = rollMatrix * input.uvOffset.zw;
+
+		float3 right = gc.worldToCamera.row0.xyz * input.uvOffset.z;
+		float3 up = gc.worldToCamera.row2.xyz * input.uvOffset.w;
+
+		float4x4 localToWorld = tc.transforms[#if DX9 input.position.w #else input.instance #end];
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(input.position.xyz, 1.0);
+		worldPosition.xyz = worldPosition + right + up;
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+
+		float3x3 tangentBasis = float3x3(
+			float3(c, -s, 0.0),
+			float3(s, c, 0.0),
+			float3(0.0, 0.0, 1.0));
+
+		output.lightDir = tangentBasis * normalize(float3(0.707, 0.707, 0.5));
+	
+		output.texcoordFog.xy = input.uvOffset.xy;
+		output.texcoordFog.z = (gc.fog.x + output.position.z) * gc.fog.y;
+		input.color.w *= localToWorld.row3.w;
+		output.color = input.color;
+
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(Textures)
+	pixelshader ps
+	{
+		float3 norm;
+		norm.xy = sample(normal, input.texcoordFog.xy).wy * 2.0 - 1.0;
+		norm.z = 1.0 - sqrt(dot(norm.xy, norm.xy));
+		float d = dot(norm, input.lightDir) * 2.0; 
+		d = d * d;
+		float3 lighting = saturate(d * pc.lightColor.xyz) + saturate((d + 1.0) / 2.0) * pc.ambientColor.xyz;
+
+		output.color = sample(diffuse, input.texcoordFog.xy) * input.color;
+		output.color.xyz *= lighting;
+		output.color.xyz = lerp(output.color.xyz, pc.fogColor.xyz, saturate(min(input.texcoordFog.z, pc.fogColor.w)));
+	}
+	stream(PixelOutput)
+}
+
+struct ZUpInterpolant
+{
+	float4 position : clipposition;
+	float2 texcoord;
+	float4 color;
+}
+
+struct ZUpTextures
+{
+	texture2d diffuse : 0;
+}
+
+program ZUp
+{
+	stream(Vertex) uniforms(VSConstants)
+	vertexshader vs
+	{
+		float s = sin(input.roll);
+		float c = cos(input.roll);
+
+		float2x2 rollMatrix = float2x2(float2(c, -s), float2(s, c));
+		input.uvOffset.zw = rollMatrix * input.uvOffset.zw;
+
+		float4x4 localToWorld = tc.transforms[#if DX9 input.position.w #else input.instance #end];
+
+		float3 right = float3(localToWorld.row0.x, localToWorld.row1.x, localToWorld.row2.x) * input.uvOffset.z;
+		float3 up = float3(localToWorld.row0.y, localToWorld.row1.y, localToWorld.row2.y) * input.uvOffset.w;
+
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(input.position.xyz, 1.0);
+		worldPosition.xyz = worldPosition + right + up;
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+
+		output.texcoord = input.uvOffset.xy;
+		output.color = input.color;
+
+	}
+	stream(ZUpInterpolant) textures(ZUpTextures)
+	pixelshader ps
+	{
+		output.color = sample(diffuse, input.texcoord) * input.color;
+	}
+	stream(PixelOutput)
+}

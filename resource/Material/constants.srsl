@@ -1,0 +1,93 @@
+#ifn CONSTANTS #def CONSTANTS
+
+// pixel constants that can be used globally
+struct PixelConstants
+{
+	float4 texelSize;
+	float4 fogColor;
+	float4 lightColor;
+	float4 ambientColor;
+	float4 userPosition;
+}
+
+// pixel constants that come from materials
+struct MaterialConstants
+{
+	float4 param0;
+	float4 param1;
+	float4 param2;
+	float4 param3;
+}
+
+// grouping of all pixel constants
+struct PSConstants
+{
+	PixelConstants pc : 0;
+	MaterialConstants mc : 1;
+}
+
+// vertex constants that can be accessed anytime
+struct GlobalConstants
+{
+	float4x4 worldToProjection;
+	float4x4 worldToCamera;
+	float4 cameraPosition;
+	float4 userPosition;
+	float4 time;
+	float4 fog;
+	float4 fogColor;
+}
+
+// constants that are set per instance (or per instance list draw)
+struct InstanceConstants
+{
+	float4 inverseScale;
+	float4 color;
+}
+
+// constants that are set per light
+struct LightConstants
+{
+	float4 color;
+	float4 ambientColor;
+	float4 position;
+	float4 nearPlane;
+	float4 radius;
+	float4 texelSize;
+	float4x4 textureProjection;
+	float4x4[4] shadowProjection;
+}
+
+// transforms for instances
+struct TransformConstants
+{
+	float4x4[52] transforms;
+}
+
+// transforms for bones (in dx9, these are appended to the transform list
+#ifn DX9
+struct BoneConstants
+{
+	float4x4[51] transforms;
+}
+#end
+
+// list of all vertex constants that are used
+struct VSConstants
+{
+	GlobalConstants gc : 0;
+	InstanceConstants ic : 1;
+	LightConstants lc : 2;
+	TransformConstants tc : 3;
+#ifn DX9
+	BoneConstants bc : 4;
+#end
+}	
+
+// common pixel output structure.... always just a color
+struct PixelOutput
+{
+	float4 color : 0;
+}
+
+#end

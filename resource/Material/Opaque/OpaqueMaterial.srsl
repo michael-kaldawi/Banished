@@ -1,0 +1,379 @@
+#include "../constants.srsl"
+#include "../lighting.srsl"
+#include "../skinning.srsl"
+#include "../functions.srsl"
+
+struct DepthVertex
+{
+	int4 position : 0;
+	#ifn DX9 uint instance : instanceid; #end
+}
+
+struct DepthInterpolant
+{
+	float4 position : clipposition;
+}
+
+program Depth
+{
+	stream(DepthVertex) uniforms(VSConstants) 
+	vertexshader vs
+	{
+		// get transform from list of instances
+		float4x4 localToWorld = tc.transforms[#if DX9 input.position.w #else input.instance #end];
+		
+		// decompress position from fixed point to float
+		float3 position = input.position.xyz.cast(float3) * (1.0 / 512.0);
+		
+		label positionmod; // insertion point for skinning, swaying in the wind, etc
+		
+		// apply local scale
+		position *= localToWorld.row3.xyz;
+
+		// transform to world, then to screenspace
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(position, 1.0);
+
+		label worldpositionmod;
+
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+	}
+	stream(DepthInterpolant) 
+	pixelshader ps
+	{
+		// depth has color writes turned off, doesn't matter what this is
+		output.color = float4(1.0, 1.0, 1.0, 1.0);
+	}
+	stream(PixelOutput)
+}
+
+struct DepthAlphaVertex
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	#ifn DX9 uint instance : instanceid; #end
+}
+
+struct DepthAlphaInterpolant
+{
+	float4 position : clipposition;
+	float2 texcoord : 0;
+}
+
+struct DepthTexture
+{
+	texture2d diffuse : 0;
+}
+
+program DepthAlpha
+{
+	stream(DepthAlphaVertex) uniforms(VSConstants) 
+	vertexshader vs : Depth.vs
+	{
+		output.texcoord = input.texcoord.xy.cast(float2) / float2(512.0, 512.0);
+	}
+	stream(DepthAlphaInterpolant) textures(DepthTexture)
+	pixelshader ps
+	{
+		// depth has color writes turned off, doesn't matter what this is
+		output.color = sample(diffuse, input.texcoord);
+		clip(output.color.w - 0.25);
+	}
+	stream(PixelOutput)
+}
+
+struct Vertex
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	float4 normal : 2;
+	#ifn DX9 uint instance : instanceid; #end	
+}
+
+struct Interpolant 
+{
+	float4 position : clipposition;
+	float4 texcoord : 0;
+	float3 lightfog : 1;
+	#ifn DETAIL0 float4 shadowProjection : 2; #end
+}
+
+struct Textures
+{
+	texture2d diffuse : 0;
+	texture2d e_aoMap : 3;
+	shadow2d e_shadowMap : 5;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants) 
+	vertexshader vs : Depth.vs
+	{
+		float3 normal = normalize(input.normal.xyz * 2.0 - 1.0);
+		label normalmod;	// insertion point for skinning, swaying in the wind, etc
+		normal = localToWorld.cast(float3x3) * normal;
+		
+		output.lightfog = GetLightingFog(normal, output.position.z, lc.nearPlane, gc.fog);
+		output.texcoord = input.texcoord.cast(float4) / float4(512.0, 512.0, 8192.0, 8192.0);
+		
+		label texcoordmod;
+
+		#ifn DETAIL0
+		output.shadowProjection = lc.shadowProjection[0] * float4(worldPosition, 1.0);
+		#end
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(Textures)
+	pixelshader ps
+	{
+		float shadow = #ifn DETAIL0 GetShadowValue(e_shadowMap, input.shadowProjection, pc.texelSize.x) #else 1.0 #end;
+		float3 ao = sample(e_aoMap, input.texcoord.zw).xxx;
+		float4 color = sample(diffuse, input.texcoord.xy);
+		
+		label colormodifier; // insertion point for modifying color (snow, damage, etc)
+		
+		output.color.xyz = ComputeLighting(input.lightfog, color.xyz, shadow, float3(1.0, 1.0, 1.0), ao, 
+			pc.lightColor, pc.ambientColor, pc.fogColor);
+		output.color.w = 0.0;
+	}
+	pixelshader psalpha : ps
+	{
+		clip(color.w - 0.5);
+	}
+	stream(PixelOutput)
+}
+
+struct DepthSkinVertex 
+{
+	int4 position : 0;
+	float4 weight : 1;
+	int4 index : 2;	
+	#ifn DX9 uint instance : instanceid; #end		
+}
+
+program DepthSkin
+{
+	stream(DepthSkinVertex) uniforms(VSConstants) 
+	vertexshader vs : Depth.vs(positionmod)
+	{
+		position = SkinPosition(position, input.index, input.weight, #if DX9 tc #else bc #end);
+	}
+	stream(DepthInterpolant) 
+	pixelshader ps : Depth.ps
+	{
+	}
+	stream(PixelOutput)
+}
+
+struct SkinVertex
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	float4 normal : 2;
+	float4 weight : 3;
+	int4 index : 4;
+	#ifn DX9 uint instance : instanceid; #end	
+}
+
+program NormalSkin
+{
+	stream(SkinVertex) uniforms(VSConstants) 
+	vertexshader vsbase : Normal.vs(positionmod)
+	{
+		position = SkinPosition(position, input.index, input.weight, #if DX9 tc #else bc #end);
+	}
+	vertexshader vs : NormalSkin.vsbase(normalmod)
+	{
+		normal = SkinNormal(normal, input.index, input.weight, #if DX9 tc #else bc #end);
+	}
+	vertexshader charactervs : NormalSkin.vs(texcoordmod)
+	{
+		output.texcoord.x = (output.texcoord.x + localToWorld.row3.w) / 8.0;
+	}
+	stream(Interpolant) 
+
+	// ... shares ps with Normal.ps
+}
+
+struct InterpolantSnow 
+{
+	float4 position : clipposition;
+	float4 texcoord : 0;
+	float3 lightfog : 1;
+	float3 seasonData : 2;		
+	#ifn DETAIL0 float4 shadowProjection : 3; #end
+}
+
+struct SnowTextures
+{
+	texture2d diffuse : 0;
+	texture2d snow : 1;
+	texture2d e_aoMap : 3;
+	shadow2d e_shadowMap : 5;
+}
+
+program Snow
+{
+	stream(Vertex) uniforms(VSConstants) 
+	vertexshader vs : Normal.vs
+	{
+		// season data
+		output.seasonData.xy = worldPosition.xy / 16.0;
+		output.seasonData.z = normal.z;
+	}
+	stream(InterpolantSnow) uniforms(PSConstants) textures(SnowTextures)
+	pixelshader ps : Normal.ps(colormodifier)
+	{
+		label damage;
+		
+		float3 sno = sample(snow, input.seasonData.xy).xyz;
+		color.xyz = lerp(color.xyz, sno, pc.userPosition.x * input.seasonData.z * color.w * ao.x * ao.x);
+	}
+	pixelshader alphatest : Snow.ps
+	{
+		clip(color.w - 0.5);
+	}
+	stream(PixelOutput)
+}
+
+struct InterpolantSnowWater
+{
+	float4 position : clipposition;
+	float4 texcoord : 0;
+	float3 lightfog : 1;
+	float4 seasonData : 2;		
+	#ifn DETAIL0 float4 shadowProjection : 3; #end
+}
+
+program SnowWater
+{
+	stream(Vertex) uniforms(VSConstants) 
+	vertexshader vs : Snow.vs
+	{
+		output.seasonData.w = GetUnderWaterAmount(worldPosition.z);
+	}
+	stream(InterpolantSnowWater) uniforms(PSConstants) textures(SnowTextures)
+	pixelshader psw : Snow.ps(colormodifier)
+	{
+		color.xyz = lerp(color.xyz, float3(0.025, 0.123, 0.19), saturate(input.seasonData.w));
+	}
+	pixelshader ps : psw
+	{
+		output.color.w = input.seasonData.w;
+	}
+	pixelshader refl : ps
+	{
+		clip(-input.seasonData.w);
+	}
+	pixelshader alphatest : ps
+	{
+		clip(color.w - 0.5);
+	}
+	stream(PixelOutput)
+}
+
+struct SnowDamageTextures
+{
+	texture2d diffuse : 0;
+	texture2d snow : 1;
+	texture2d damage : 2;
+	texture2d e_aoMap : 3;
+	shadow2d e_shadowMap : 5;
+}
+
+program SnowDamage
+{
+	// shares snow vs...
+
+	stream(InterpolantSnow) uniforms(PSConstants) textures(SnowDamageTextures)
+	pixelshader ps : Snow.ps(damage)
+	{
+		float3 dam = sample(damage, (input.texcoord.zw * 4.0)).xyz;
+
+		float amount = 1.0 - dot(color.xyx, color.xyz);
+		amount = saturate(min(0.75, 1.0 - (amount * amount)));
+		color.xyz = lerp(color.xyz, dam, amount);
+	}
+	pixelshader alphatest : ps
+	{
+		clip(color.w - 0.5);
+	}
+	stream(PixelOutput)
+}
+
+program SnowWaterDamage
+{
+	// shares snow water vs...
+	stream(InterpolantSnowWater) uniforms(PSConstants) textures(SnowDamageTextures)
+	pixelshader ps : SnowWater.ps(damage)
+	{
+		float3 dam = sample(damage, (input.texcoord.zw * 4.0)).xyz;
+
+		float amount = 1.0 - dot(color.xyx, color.xyz);
+		amount = saturate(min(0.75, 1.0 - (amount * amount)));
+		color.xyz = lerp(color.xyz, dam, amount);
+	}
+	pixelshader refl : ps
+	{
+		clip(-input.seasonData.w);
+	}
+	pixelshader alphatest : ps
+	{
+		clip(color.w - 0.5);
+	}
+	stream(PixelOutput)
+}
+
+struct DepthUserVertex
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	int2 userData : 2;
+	#ifn DX9 uint instance : instanceid; #end	
+}
+
+program FoliageDepth
+{
+	stream(DepthUserVertex) uniforms(VSConstants)
+	vertexshader vs : Depth.vs(worldpositionmod)
+	{
+		float2 offset = sin(worldPosition.xy + gc.time.xx) * 0.025 * (input.userData.cast(float2) / 8192.0);
+		worldPosition.xy += offset;
+		output.texcoord = input.texcoord.xy.cast(float2) / float2(512.0, 512.0);
+	}
+	stream(DepthAlphaInterpolant) textures(Texture)
+
+	// shares ps with DepthAlpha.ps
+}
+
+struct UserVertex
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	float4 normal : 2;
+	int2 userData : 3;
+	#ifn DX9 uint instance : instanceid; #end	
+}
+
+program Foliage
+{
+	stream(UserVertex) uniforms(VSConstants)
+	vertexshader base : Normal.vs(worldpositionmod)
+	{
+		output.seasonData.xy = worldPosition.xy / 16.0;
+
+		float2 offset = sin(worldPosition.xy + gc.time.xx) * 0.025 * (input.userData.cast(float2) / 8192.0);
+		worldPosition.xy += offset;
+	}
+	vertexshader vs : base
+	{
+		output.seasonData.z = normal.z * gc.userPosition.x;
+	}
+	stream(InterpolantSnow) uniforms(PSConstants) textures(SnowTextures)
+	pixelshader ps : Normal.ps(colormodifier)
+	{
+		float3 sno = sample(snow, input.seasonData.xy).xyz;
+		color.xyz = lerp(color.xyz, sno, input.seasonData.z * ao * ao * ao * ao);
+		clip(color.w - 0.5);
+	}
+	stream(PixelOutput)
+}

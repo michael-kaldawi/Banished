@@ -1,0 +1,11 @@
+#ifn FUNCTIONS #def FUNCTIONS
+
+float GetUnderWaterAmount(float z)
+{
+	float waterStart = -0.75;
+	float waterEnd = -2.25;
+	
+	return ((z - waterStart) / (waterEnd - waterStart));
+}
+
+#end
