@@ -1,0 +1,47 @@
+#include "../constants.srsl"
+
+struct Vertex
+{
+	float4 position;
+	float4 texcoord;
+
+	#ifn DX9 uint instance : instanceid; #end
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float3 texcoord;
+	float2 fade;
+}
+
+struct Textures
+{
+	texture2d diffuse : 0;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants) 
+	vertexshader vs
+	{
+		float4x4 localToWorld = tc.transforms[#if DX9 input.position.w #else input.instance #end];
+
+		float3 position = input.position.xyz.cast(float3);
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(position, 1.0);
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+
+		output.texcoord.xy = input.texcoord.xy;
+		output.texcoord.z = ic.color.w;
+		output.fade.x = (output.position.z + ic.inverseScale.x) * ic.inverseScale.y;
+		output.fade.y = (output.position.z + ic.inverseScale.z) * ic.inverseScale.w;
+
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(Textures)
+	pixelshader ps
+	{
+		output.color = sample(diffuse, input.texcoord.xy);
+		output.color.w *= input.texcoord.z * saturate(input.fade.x) * saturate(input.fade.y);
+	}
+	stream(PixelOutput)
+}

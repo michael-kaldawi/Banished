@@ -1,0 +1,359 @@
+#include "../constants.srsl"
+#include "../lighting.srsl"
+#include "../functions.srsl"
+
+struct DepthVertex
+{
+	int4 position : 0;
+}
+
+struct DepthInterpolant
+{
+	float4 position : clipposition;
+}
+
+program Depth
+{
+	stream(DepthVertex) uniforms(VSConstants) 
+	vertexshader vs
+	{
+		float3 inputPosition = input.position.xyz.cast(float3) * float3(1.0, 1.0, 1.0 / 256.0);
+		float3 worldPosition = tc.transforms[0].cast(float3x4) * float4(inputPosition, 1.0);
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+	}
+	stream(DepthInterpolant) 
+	pixelshader ps
+	{
+		output.color = float4(1.0, 1.0, 1.0, 1.0);
+	}
+	stream(PixelOutput)
+}
+
+struct Vertex
+{
+	int4 position : 0;
+	int2 texcoord : 1;
+	float4 normal : 2;
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float4 texcoord : 0;
+	float3 lightfog : 1;
+	float3 worldNormal : 2;
+	float2 heightWater : 3;
+#ifn DETAIL0
+	float4 shadowProjection : 4;
+#end
+}
+
+struct Textures
+{
+	texture2d grass : 0;
+	texture2d dirt : 1;
+	texture2d snow : 2;
+	texture2d rock : 3;
+	shadow2d e_shadowMap : 5;
+	texture2d e_transition : 6;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants) 
+	vertexshader vs : Depth.vs
+	{
+		float3 normal = normalize(input.normal.xyz * 2.0 - 1.0);
+	
+		output.lightfog = GetLightingFog(normal, output.position.z, lc.nearPlane, gc.fog);
+
+		output.texcoord.xy = inputPosition.xy / 16.0;
+		output.texcoord.zw = input.texcoord.xy.cast(float2) / 16384.0;
+	
+		output.worldNormal.xyz = normal;
+		output.heightWater.x = inputPosition.z / 16.0;
+		output.heightWater.y = GetUnderWaterAmount(inputPosition.z);
+
+		// shadowmap, if needed
+		#ifn DETAIL0
+		output.shadowProjection = lc.shadowProjection[0] * float4(worldPosition, 1.0);
+		#end
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(Textures)
+	pixelshader ps
+	{
+		float shadow = #ifn DETAIL0 GetShadowValue(e_shadowMap, input.shadowProjection, pc.texelSize.x) #else 1.0 #end;
+
+		float4 grassmap = sample(grass, input.texcoord.xy);
+		float4 dirtmap = sample(dirt, input.texcoord.xy);
+		float4 snowmap = sample(snow, input.texcoord.xy);
+		float4 transition = sample(e_transition, input.texcoord.zw);
+    
+		float4 rocka = sample(rock, float2(input.texcoord.y, input.heightWater.x));
+		float4 rockb = sample(rock, float2(input.texcoord.x, input.heightWater.x));
+		float4 rockc = sample(rock, input.texcoord.xy);
+		float3 n = abs(input.worldNormal.xyz);
+		float4 rocks = rocka * n.x + rockb * n.y + rockc * n.z;    
+		    
+		float3 diffuse = grassmap.xyz;
+		diffuse = lerp(diffuse, dirtmap.xyz, transition.z);
+		diffuse = lerp(diffuse, rocks.xyz, transition.y);
+    
+		float snowAmount = input.worldNormal.z * input.worldNormal.z;
+		snowAmount *= snowAmount * pc.userPosition.x;
+		snowAmount = max(snowAmount, transition.w);
+		diffuse = lerp(diffuse, snowmap.xyz, snowAmount);
+    
+		diffuse.xyz = lerp(diffuse.xyz, float3(0.025, 0.123, 0.19), saturate(input.heightWater.y));
+
+		output.color.xyz = ComputeLighting(input.lightfog, diffuse, shadow, float3(1.0, 1.0, 1.0), transition.xxx,
+			pc.lightColor, pc.ambientColor, pc.fogColor);
+		output.color.w = input.heightWater.y;
+	}
+	pixelshader refl : ps
+	{
+		clip(-input.heightWater.y);
+	}
+	stream(PixelOutput)
+}
+
+struct DecalVertex
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	float4 normal : 2;
+}
+
+struct DecalInterpolant
+{
+	float4 position : clipposition;
+	float3 texcoord;
+	float4 lightFogAlpha;
+#ifn DETAIL0 
+	float4 shadowProjection; 
+#end
+}
+
+struct DecalTextures
+{
+	texture2d diffuse : 0;
+	shadow2d e_shadowMap : 5;
+}
+
+program Decal
+{
+	stream(DecalVertex) uniforms(VSConstants)
+	vertexshader vs
+	{
+		float4x4 localToWorld = tc.transforms[0];
+		float4 position = input.position.cast(float4);
+		position.z /= 256.0;
+
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(position.xyz, 1.0);
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+	
+		float3 normal = normalize(input.normal.xyz * 2.0 - 1.0);
+	
+		output.lightFogAlpha.xyz = GetLightingFog(normal, output.position.z, lc.nearPlane, gc.fog);
+		output.lightFogAlpha.w = position.w / 255.0;
+	
+		output.texcoord.xy = input.texcoord.xy.cast(float2) / 4096.0;
+		output.texcoord.z = GetUnderWaterAmount(position.z);
+
+		#ifn DETAIL0
+		output.shadowProjection = lc.shadowProjection[0] * float4(worldPosition, 1.0);
+		#end
+	}
+	stream(DecalInterpolant) uniforms(PSConstants) textures(DecalTextures)
+	pixelshader ps
+	{
+		float shadow = #ifn DETAIL0 GetShadowValue(e_shadowMap, input.shadowProjection, pc.texelSize.x) #else 1.0 #end;
+		float4 diff = sample(diffuse, input.texcoord.xy);
+
+		label colormod;
+    
+		output.color.xyz = ComputeLighting(input.lightFogAlpha.xyz, diff.xyz, shadow,
+			pc.lightColor, pc.ambientColor, pc.fogColor);
+		output.color.xyz = lerp(output.color.xyz, float3(0.025, 0.123, 0.19), saturate(input.texcoord.z));
+		output.color.w = diff.w * input.lightFogAlpha.w;
+	}
+	stream(PixelOutput)
+}
+
+struct DecalDamageTextures
+{
+	texture2d diffuse : 0;
+	texture2d damage : 1;
+	shadow2d e_shadowMap : 5;
+}
+
+program DecalDamage
+{
+	stream(DecalInterpolant) uniforms(PSConstants) textures(DecalDamageTextures)
+	pixelshader psbase : Decal.ps(colormod)
+	{
+		float4 dam = sample(damage, input.texcoord.xy * 2.0);
+		diff.xyz = lerp(diff.xyz, dam.xyz, 0.7);
+	}
+	pixelshader ps : psbase
+	{
+		output.color.w *= max((1.0 - pc.userPosition.x), dam.w);
+	}
+	stream(PixelOutput)
+}
+
+struct DecalBlendInterpolant
+{
+	float4 position : clipposition;
+	float3 texcoord;
+	float4 lightFogAlpha;
+	float3 localPosition;
+	float3 normal;
+#ifn DETAIL0 
+	float4 shadowProjection; 
+#end
+}
+
+struct DecalBlendTextures
+{
+	texture2d diffuse : 0;
+	texture2d snow : 1;
+	texture2d blend : 2;
+	shadow2d e_shadowMap : 5;
+}
+
+program DecalBlend
+{
+	stream(DecalVertex) uniforms(VSConstants)
+	vertexshader vs : Decal.vs
+	{
+		output.localPosition = position.xyz / 16.0;
+		output.normal = normal * normal * normal * normal;
+	}
+	stream(DecalBlendInterpolant) uniforms(PSConstants) textures(DecalBlendTextures)
+	pixelshader ps
+	{
+		float shadow = #ifn DETAIL0 GetShadowValue(e_shadowMap, input.shadowProjection, pc.texelSize.x) #else 1.0 #end;
+		float4 diff = sample(diffuse, input.texcoord.xy);
+		float4 sno = sample(snow, input.texcoord.xy);
+	
+		float4 blendX = sample(blend, input.localPosition.yz);
+		float4 blendY = sample(blend, input.localPosition.xz);
+		float4 blendZ = sample(blend, input.texcoord.yx);
+
+		float3 na = abs(input.normal);
+		float3 blendval = blendX.xyz * na.x + blendY.xyz * na.y + blendZ.xyz * na.z;
+		diff.xyz = lerp(blendval, diff.xyz, diff.w);
+		diff.xyz = lerp(diff.xyz, sno.xyz, input.normal.z * pc.userPosition.x);
+	    
+		output.color.xyz = ComputeLighting(input.lightFogAlpha.xyz, diff.xyz, shadow, 
+			pc.lightColor, pc.ambientColor, pc.fogColor);
+		output.color.w = blendZ.w * input.lightFogAlpha.w; 
+	}
+	stream(PixelOutput)
+}
+
+struct TiledDecalInterpolant
+{
+	float4 position : clipposition;
+	float3 texcoord;
+	float4 lightFogAlpha;
+	float2 texcoord2;
+#ifn DETAIL0 
+	float4 shadowProjection; 
+#end
+}
+
+struct TiledDecalTextures
+{
+	texture2d diffuse : 0;
+	texture2d tiles : 1;
+	shadow2d e_shadowMap : 5;
+}
+
+program TiledDecal
+{
+	stream(DecalVertex) uniforms(VSConstants)
+	vertexshader vs : Decal.vs
+	{
+		output.texcoord.xy = input.texcoord.xy.cast(float2) / 16.0;
+		output.texcoord2 = input.texcoord.zw.cast(float2) / 4096.0;
+	}
+	stream(TiledDecalInterpolant) uniforms(PSConstants) textures(TiledDecalTextures)
+	pixelshader ps : Decal.ps
+	{
+		float4 mask = sample(tiles, input.texcoord2);
+		output.color.w = diff.w * mask.y * input.lightFogAlpha.w;
+	}
+	stream(PixelOutput)
+}
+
+struct TiledDecalTunnelInterpolant
+{
+	float4 position : clipposition;
+	float3 texcoord;
+	float4 lightFogAlpha;
+	float2 texcoord2;
+	float zcutoff;
+#ifn DETAIL0 
+	float4 shadowProjection; 
+#end
+}
+
+program TiledDecalTunnel
+{
+	stream(DecalVertex) uniforms(VSConstants)
+	vertexshader vs : TiledDecal.vs
+	{
+		float minZ = 1.8;
+		float maxZ = 1.6;
+		output.zcutoff = (worldPosition.z - minZ) / (maxZ - minZ);
+	}
+	stream(TiledDecalTunnelInterpolant) uniforms(PSConstants) textures(TiledDecalTextures)
+	pixelshader ps : TiledDecal.ps
+	{
+		output.color.w *= saturate(input.zcutoff);
+	}
+	stream(PixelOutput)
+}
+
+struct TiledDecalSnowInterpolant
+{
+	float4 position : clipposition;
+	float3 texcoord;
+	float4 lightFogAlpha;
+	float2 texcoord2;
+#ifn DETAIL0 
+	float4 shadowProjection; 
+#end
+}
+
+struct TiledDecalSnowTextures
+{
+	texture2d diffuse : 0;
+	texture2d tiles : 1;
+	texture2d snow : 2;
+	shadow2d e_shadowMap : 5;
+}
+
+program TiledSnowDecal
+{
+	stream(DecalVertex) uniforms(VSConstants)
+	vertexshader vs : TiledDecal.vs
+	{
+	}
+	stream(TiledDecalSnowInterpolant) uniforms(PSConstants) textures(TiledDecalSnowTextures)
+	pixelshader pssnow : TiledDecal.ps(colormod)
+	{
+		float4 sno = sample(snow, input.texcoord.xy);
+		diff.xyz = lerp(diff.xyz, sno.xyz, diff.w * pc.userPosition.x);
+	}
+	pixelshader ps : pssnow
+	{
+		output.color.w = mask.y * input.lightFogAlpha.w;
+	}
+
+	stream(PixelOutput)
+}
+
+

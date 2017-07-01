@@ -1,0 +1,24 @@
+#ifn _SKINNING_ #def SKINNING
+
+
+float3 SkinPosition(float3 position, int4 index, float4 weight, 
+	#if DX9 TransformConstants #else BoneConstants #end bc)
+{
+	return
+		((bc.transforms[index.x] * float4(position, 1.0) * weight.x) +
+		(bc.transforms[index.y] * float4(position, 1.0) * weight.y) +
+		(bc.transforms[index.z] * float4(position, 1.0) * weight.z) +
+		(bc.transforms[index.w] * float4(position, 1.0) * weight.w)).xyz;
+}
+
+float3 SkinNormal(float3 normal, int4 index, float4 weight, 
+	#if DX9 TransformConstants #else BoneConstants #end bc)
+{
+	return
+		(bc.transforms[index.x].cast(float3x3) * normal * weight.x) +
+		(bc.transforms[index.y].cast(float3x3) * normal * weight.y) +
+		(bc.transforms[index.z].cast(float3x3) * normal * weight.z) +
+		(bc.transforms[index.w].cast(float3x3) * normal * weight.w);
+}
+
+#end

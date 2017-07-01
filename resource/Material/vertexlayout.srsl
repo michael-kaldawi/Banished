@@ -1,0 +1,59 @@
+#ifn VERTEXLAYOUT #def VERTEXLAYOUT
+
+struct DebugVertex
+{
+	float3 position : 0;
+	float4 color : 1;
+}
+
+struct UIVertex
+{
+	float3 position : 0;
+	float4 color : 1;
+	float2 texcoord0 : 2;
+	float2 texcoord1 : 3;
+}
+
+struct ModelInstance
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	float4 normal : 2;
+
+#ifn DX9
+	uint instance : instanceid;
+#end
+}
+
+struct ModelSkinInstance
+{
+	int4 position : 0;
+	int4 texcoord : 1;
+	float4 normal : 2;
+	float4 weight : 3;
+	int4 index : 4;
+
+#ifn DX9
+	uint instance : instanceid;
+#end
+}
+
+struct ModelDepthInstance
+{
+	int4 position : 0;
+#ifn DX9
+	uint instance : instanceid;
+#end
+}
+
+struct ModelDepthSkinInstance
+{
+	int4 position : 0;
+	float4 weight : 1;
+	int4 index : 2;
+#ifn DX9
+	uint instance : instanceid;
+#end
+}
+
+#end

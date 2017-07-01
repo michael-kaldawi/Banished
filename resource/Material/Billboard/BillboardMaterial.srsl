@@ -1,0 +1,142 @@
+#include "../constants.srsl"
+#include "../lighting.srsl"
+
+struct DepthInterpolant
+{
+	float4 position : clipposition;
+	float2 texcoord;
+	float2 seasonData;
+}
+
+struct DepthTextures
+{
+	texture2d diffuse;
+}
+
+struct Vertex
+{
+	int4 position;
+	int4 texcoord;
+	float4 normal;
+	int2 userData;
+
+	#ifn DX9 uint instance : instanceid; #end
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float4 texcoord;
+	float4 lightFogMove;
+	#ifn DETAIL0 float4 shadowProjection; #end
+}
+
+struct Textures
+{
+	texture2d diffuse : 0;
+	texture2d e_aoMap :	3;
+	shadow2d e_shadowMap : 5;
+}
+
+float3 Billboard(float3 position, float3 scale, float move, 
+	float3 cameraNormal, float4x4 worldToCamera, float2 weights, float4 time)
+{
+	float2 offset = sin(position.xy + time.xx) * 0.025 * dot(cameraNormal, cameraNormal) * scale.xz * move;
+
+	float3 forward = worldToCamera.row1.xyz;
+	float3 right = normalize(worldToCamera.row0.xyz + forward * cameraNormal.x * 0.5) * scale.x;
+	float3 up = normalize(worldToCamera.row2.xyz + forward * cameraNormal.z * 0.5) * scale.z;
+
+	float3 oldPostion = position;
+	position += right * offset.x + up * offset.y;	
+	float3 normal = right * weights.x + up * weights.y;
+	position += normal;
+	
+	return position;
+}
+
+program Depth
+{
+	stream(Vertex) uniforms(VSConstants)
+	vertexshader base
+	{
+		float4x4 localToWorld = tc.transforms[#if DX9 input.position.w #else input.instance #end];
+		float3 position = (input.position.xyz.cast(float3) * (1.0 / 512.0)) * localToWorld.row3.xyz;
+		float3 worldPosition = localToWorld.cast(float3x4) * float4(position, 1.0);
+
+		float3 normal = normalize(input.normal.xyz.cast(float3) * 2.0 - 1.0);
+		normal = localToWorld.cast(float3x3) * normal;
+		float3 cameraNormal = gc.worldToCamera.cast(float3x3) * normal.xyz;
+	
+		float2 userData = input.userData.cast(float2);
+		float move = step(0.05, abs(dot(userData, userData)));
+		userData /= 8192.0;
+
+		worldPosition = Billboard(worldPosition, localToWorld.row3.xyz, move, 
+			cameraNormal, gc.worldToCamera, userData, gc.time);
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+	}
+	vertexshader vs : base
+	{
+		output.texcoord = input.texcoord.xy.cast(float2) / float2(512.0, 512.0);
+		output.seasonData.xy = gc.userPosition.zz * move;
+	}
+	stream(DepthInterpolant) textures(DepthTextures)
+	pixelshader ps
+	{
+		output.color = sample(diffuse, input.texcoord);
+		output.color.w -= input.seasonData.x;
+		clip(output.color.w - 0.5);
+	}
+	pixelshader psevergreen
+	{
+		output.color = sample(diffuse, input.texcoord);
+		clip(output.color.w - 0.5);
+	}
+	stream(PixelOutput)
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants)
+	vertexshader vs : Depth.base
+	{
+		float3 billboardNormal = normalize(position.xyz + float3(0.0, 0.0, 4.0));
+		normal = normal * (1.0 - move) + billboardNormal * move;
+	
+		output.lightFogMove.xyz = GetLightingFog(normal, output.position.z, lc.nearPlane, gc.fog);
+		output.lightFogMove.w = move;
+
+		output.texcoord = input.texcoord.cast(float4) / float4(512.0, 512.0, 8192.0, 8192.0);
+
+		#ifn DETAIL0
+		output.shadowProjection = lc.shadowProjection[0] * float4(worldPosition, 1.0);
+		#end
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(Textures)
+	pixelshader base
+	{
+		float shadow = #ifn DETAIL0 GetShadowValue(e_shadowMap, input.shadowProjection, pc.texelSize.x) #else 1.0 #end;
+
+		float3 ao = sample(e_aoMap, input.texcoord.zw).xxx;
+		float4 diff = sample(diffuse, input.texcoord.xy);
+
+		label colormod;
+    
+		output.color.xyz = ComputeLighting(input.lightFogMove.xyz, diff.xyz, shadow, float3(1.0, 1.0, 1.0), ao,
+			pc.lightColor, pc.ambientColor, pc.fogColor);
+		output.color.w = 0.0;
+	}
+	pixelshader psevergreen : base
+	{
+		clip(diff.w - 0.5);
+	}
+	pixelshader ps : base(colormod)
+	{
+		float3 fallColor = dot(diff.xyz, diff.xyz) * float3(233.0 / 255.0, 185.0 / 255.0, 71.0 / 255.0);
+		diff.xyz = lerp(diff.xyz, fallColor, pc.userPosition.y * input.lightFogMove.w);
+
+		clip((diff.w - (input.lightFogMove.w * pc.userPosition.z)) - 0.5);
+	}
+	stream(PixelOutput)
+}

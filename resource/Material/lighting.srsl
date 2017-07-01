@@ -1,0 +1,129 @@
+#ifn LIGHTING #def LIGHTING
+
+float3 GetLightingFog(float3 normal, float cameraZ, float4 nearPlane, float4 fog)
+{
+	float3 lf;
+	float dp = dot(normal, nearPlane.xyz);
+	lf.x = -dp;									// direct light
+	lf.y = (dp + 3.0) * 0.5;					// ambient light
+	lf.z = (fog.x + cameraZ) * fog.y;			// fog
+
+	return lf;
+}
+
+#if NOCOMPILE
+void GetLighting(float3 normal, float3 tint, out float3 lightColor, out float3 ambientColor)
+{
+	lightColor = saturate(dot(normal, -lc_nearPlane.xyz)) * lc_color.xyz * tint;
+	ambientColor = (((dot(normal, lc_nearPlane.xyz)) + 3.0) / 2.0) * lc_ambientColor.xyz * tint;
+}
+#end
+
+float3 ComputeLighting(float3 lightingFog, float3 diffuse, float shadow, float3 lightTint, float3 ambientTint,
+	float4 lightColor, float4 ambientColor, float4 fogColor)
+{
+	// compute ambient and direct light
+	float3 directLight = lightColor.xyz * shadow * saturate(lightingFog.x) * lightTint;
+	float3 ambientLight = ambientColor.xyz * lightingFog.y * ambientTint;
+	float3 lighting = (directLight + ambientLight) * diffuse;
+
+	// apply fog
+	return lerp(lighting, fogColor.xyz, saturate(min(lightingFog.z, fogColor.w)));
+}
+
+float3 ComputeLighting(float3 lightingFog, float3 diffuse, float shadow,
+	float4 lightColor, float4 ambientColor, float4 fogColor)
+{
+	// compute ambient and direct light
+	float3 directLight = lightColor.xyz * shadow * saturate(lightingFog.x);
+	float3 ambientLight = ambientColor.xyz * lightingFog.y;
+	float3 lighting = (directLight + ambientLight) * diffuse;
+
+	// apply fog
+	return lerp(lighting, fogColor.xyz, saturate(min(lightingFog.z, fogColor.w)));
+}
+
+float GetShadowHigh(shadow2d shadowMap, float4 projection, float texelSize)
+{
+	float4 offset = float4(texelSize, -texelSize, 0.0, 0.0);
+	
+	// dx9 must use sampleproj for this to work! dx11 doesn't use it to avoid the divide by w!
+    float shadow0 = sample(shadowMap, (projection + offset.xxzz) #ifn DX9 .xyz #end);
+    float shadow1 = sample(shadowMap, (projection + offset.xyzz) #ifn DX9 .xyz #end);
+    float shadow2 = sample(shadowMap, (projection + offset.yxzz) #ifn DX9 .xyz #end);
+    float shadow3 = sample(shadowMap, (projection + offset.yyzz) #ifn DX9 .xyz #end);
+    float shadow4 = sample(shadowMap, projection #ifn DX9 .xyz #end);
+    float shadow5 = sample(shadowMap, (projection + offset.xzzz) #ifn DX9 .xyz #end);
+    float shadow6 = sample(shadowMap, (projection + offset.yzzz) #ifn DX9 .xyz #end);
+    float shadow7 = sample(shadowMap, (projection + offset.zxzz) #ifn DX9 .xyz #end);
+    float shadow8 = sample(shadowMap, (projection + offset.zyzz) #ifn DX9 .xyz #end);
+
+    return (shadow0 + shadow1 + shadow2 + shadow3 + shadow4 + shadow5 + shadow6 + shadow7 + shadow8) * (1.0 / 9.0);
+}
+
+float GetShadowMedium(shadow2d shadowMap, float4 projection, float texelSize)
+{
+	float4 offset = float4(texelSize * 0.5, -texelSize * 0.5, 0.0, 0.0);
+
+	// dx9 must use sampleproj for this to work! dx11 doesn't use it to avoid the divide by w!
+    float shadow0 = sample(shadowMap, (projection + offset.xxzz) #ifn DX9 .xyz #end);
+    float shadow1 = sample(shadowMap, (projection + offset.xyzz) #ifn DX9 .xyz #end);
+    float shadow2 = sample(shadowMap, (projection + offset.yxzz) #ifn DX9 .xyz #end);
+    float shadow3 = sample(shadowMap, (projection + offset.yyzz) #ifn DX9 .xyz #end);
+
+    return (shadow0 + shadow1 + shadow2 + shadow3) * (1.0 / 4.0);
+}
+
+float GetShadowHighStar(shadow2d shadowMap, float4 projection, float texelSize)
+{
+	float4 offset = float4(texelSize, -texelSize, 0.0, 0.0);
+	float4 offset2 = float4(2.0 * texelSize, -2.0 * texelSize, 0.0, 0.0);
+
+	// dx9 must use sampleproj for this to work! dx11 doesn't use it to avoid the divide by w!
+    float shadow0 = sample(shadowMap, (projection + offset.xxzz) #ifn DX9 .xyz #end);
+    float shadow1 = sample(shadowMap, (projection + offset.xyzz) #ifn DX9 .xyz #end);
+    float shadow2 = sample(shadowMap, (projection + offset.yxzz) #ifn DX9 .xyz #end);
+    float shadow3 = sample(shadowMap, (projection + offset.yyzz) #ifn DX9 .xyz #end);
+    float shadow4 = sample(shadowMap, projection #ifn DX9 .xyz #end);
+    float shadow5 = sample(shadowMap, (projection + offset2.xzzz) #ifn DX9 .xyz #end);
+    float shadow6 = sample(shadowMap, (projection + offset2.yzzz) #ifn DX9 .xyz #end);
+    float shadow7 = sample(shadowMap, (projection + offset2.zxzz) #ifn DX9 .xyz #end);
+    float shadow8 = sample(shadowMap, (projection + offset2.zyzz) #ifn DX9 .xyz #end);
+
+    return (shadow0 + shadow1 + shadow2 + shadow3 + shadow4 + shadow5 + shadow6 + shadow7 + shadow8) * (1.0 / 9.0);
+}
+
+float GetShadowMediumStar(shadow2d shadowMap, float4 projection, float texelSize)
+{
+	float4 offset = float4(texelSize, -texelSize, 0.0, 0.0);
+
+	// dx9 must use sampleproj for this to work! dx11 doesn't use it to avoid the divide by w!
+    float shadow0 = sample(shadowMap, (projection + offset.xxzz) #ifn DX9 .xyz #end);
+    float shadow1 = sample(shadowMap, (projection + offset.xyzz) #ifn DX9 .xyz #end);
+    float shadow2 = sample(shadowMap, (projection + offset.yxzz) #ifn DX9 .xyz #end);
+    float shadow3 = sample(shadowMap, (projection + offset.yyzz) #ifn DX9 .xyz #end);
+    float shadow4 = sample(shadowMap, projection #ifn DX9 .xyz #end);
+
+    return (shadow0 + shadow1 + shadow2 + shadow3 + shadow4) * (1.0 / 5.0);
+}
+
+float GetShadowLow(shadow2d shadowMap, float4 projection)
+{
+	// dx9 must use sampleproj for this to work! dx11 doesn't use it to avoid the divide by w!
+    return sample(shadowMap, projection #ifn DX9 .xyz #end);
+}
+
+float GetShadowValue(shadow2d shadowMap, float4 projection, float texelSize)
+{
+#if DETAIL1
+	return GetShadowLow(shadowMap, projection);
+#else 
+#if DETAIL2
+	return GetShadowMedium(shadowMap, projection, texelSize);
+#else
+	return GetShadowHigh(shadowMap, projection, texelSize);
+#end
+#end
+}
+
+#end

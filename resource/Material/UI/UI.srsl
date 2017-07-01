@@ -1,0 +1,54 @@
+#include "../constants.srsl"
+#include "../vertexlayout.srsl"
+
+struct Interpolant
+{
+	float4 position : clipposition;
+	float4 color : 0;
+	float2 texcoord : 1;
+}
+
+struct UITexture
+{
+	texture2d diffuse : 0;
+}
+
+program Normal
+{
+	stream(UIVertex) uniforms(VSConstants) 
+	vertexshader vs
+	{
+		float3 worldPosition = tc.transforms[0].cast(float3x4) * float4(input.position, 1.0);
+		output.position = gc.worldToProjection * float4(worldPosition, 1.0);
+	
+		output.color = input.color * ic.color;
+		output.texcoord = input.texcoord0;
+	}
+	stream(Interpolant) uniforms(PSConstants) textures(UITexture)
+	pixelshader ps
+	{
+		output.color = input.color * sample(diffuse, input.texcoord);
+	}
+	pixelshader logo
+	{
+		float4 image = sample(diffuse, input.texcoord);
+
+		float2 pixel = input.texcoord * float2(1600.0, 900.0);
+		float2 center = float2(800.0, 421.0);
+
+		float2 tc = pixel - center;
+		float s = sin(pc.userPosition.x * 0.5);
+		float c = cos(pc.userPosition.x * 0.5);
+
+		float2x2 rotation = float2x2(float2(c, s), float2(-s, c));
+		float2 rc = rotation * tc;
+
+		rc += center;
+		float4 rimage = sample(diffuse, rc / (float2(1600.0, 900.0)));
+
+		float t = image.x + (1.0 - rimage.z) * image.y;
+		output.color.xyz = lerp(float3(1.0, 1.0, 1.0), float3(43.0 / 255.0, 53.0 / 255.0, 63.0 / 255.0), t);
+		output.color.w = input.color.w;
+	}
+	stream(PixelOutput)
+}

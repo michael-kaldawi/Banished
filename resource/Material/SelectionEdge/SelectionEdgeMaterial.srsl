@@ -1,0 +1,79 @@
+#include "../constants.srsl"
+#include "../lighting.srsl"
+#include "../skinning.srsl"
+
+struct Vertex
+{
+	int4 positionA : 0;
+	int4 positionB : 1;
+}
+
+struct SkinVertex
+{
+	int4 positionA : 0;
+	int4 positionB : 1;
+	float4 weightA : 2;
+	int4 indexA : 3;
+	float4 weightB : 4;
+	int4 indexB : 5;
+}
+
+struct Interpolant
+{
+	float4 position : clipposition;
+}
+
+program Normal
+{
+	stream(Vertex) uniforms(VSConstants)
+	vertexshader vs
+	{
+		float4x4 localToWorld = tc.transforms[0];
+
+		float4 position = input.positionA.cast(float4) * (1.0 / 512.0);
+
+		float3 positionA = position.xyz;
+		float3 positionB = input.positionB.xyz.cast(float3) * (1.0 / 512.0);
+
+		label positionmod;
+
+		float3 worldPositionA = localToWorld.cast(float3x4) * float4(positionA.xyz * localToWorld.row3.xyz, 1.0);
+		float3 worldPositionB = localToWorld.cast(float3x4) * float4(positionB.xyz * localToWorld.row3.xyz, 1.0);
+
+		float3 cameraRight = gc.worldToCamera.row0.xyz;
+		float3 cameraForward = gc.worldToCamera.row1.xyz;
+
+		float3 lineDirection = normalize(worldPositionB - worldPositionA);
+		float3 widthDirection = normalize(cross(lineDirection, cameraForward));
+
+		float4 r0 = gc.worldToProjection * float4(worldPositionA, 1.0);
+		float4 r1 = gc.worldToProjection * float4(worldPositionA + cameraRight, 1.0);
+
+		r0.xyz /= r0.w;
+		r1.xyz /= r1.w;
+		
+		float edgeSize = 4.0;
+		float size = edgeSize * (1.0 / (r1.x - r0.x)) * ic.inverseScale.w;
+
+		worldPositionA = worldPositionA - (lineDirection * size) + (widthDirection * position.w * size);
+
+		output.position = gc.worldToProjection * float4(worldPositionA, 1.0);
+	}
+	stream(Interpolant) uniforms(PSConstants) 
+	pixelshader ps
+	{
+		output.color = float4(0.99, 0.80, 0.30, 1.0);
+	}
+	stream(PixelOutput)
+}
+
+program Skin
+{
+	stream(SkinVertex) uniforms(VSConstants)
+	vertexshader vs : Normal.vs(positionmod)
+	{
+		positionA = SkinPosition(positionA.xyz, input.indexA, input.weightA, #if DX9 tc #else bc #end);
+		positionB = SkinPosition(positionB.xyz, input.indexB, input.weightB, #if DX9 tc #else bc #end);
+	}
+	stream(Interpolant) uniforms(PSConstants) 
+}
